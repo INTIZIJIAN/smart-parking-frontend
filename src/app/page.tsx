@@ -37,7 +37,9 @@ export default function Home() {
           setAvailableSpot((prevSpots) => {
             if (!prevSpots) return null;
             return prevSpots.map((spot) =>
-              spot.id === update.id ? { ...spot, available: update.available } : spot
+              spot.id === update.id
+                ? { ...spot, available: update.available }
+                : spot
             );
           });
         });
@@ -56,18 +58,40 @@ export default function Home() {
   const BASE_URL = "http://localhost:8080/api/parking";
 
   const reserveSpot = async () => {
-    try {
-      const res = await axios.post(`${BASE_URL}/reserve`, null, {
-        params: { userId },
-      });
-      setBooking(res.data);
-    } catch (err) {
-      console.error("Reservation failed", err);
-      setBooking(null);
+    if (userId === "") {
+      toast.error("Please enter your Car Plate Number");
+      return;
+    } else if (userId.length !== 8) {
+      toast.error("Car Plate Number must be 8 characters");
+      return;
+    } else if (booking) {
+      toast.error("You already have a booking");
+      return;
+    } else {
+      try {
+        const res = await axios.post(`${BASE_URL}/reserve`, null, {
+          params: { userId },
+        });
+        setBooking(res.data);
+      } catch (err) {
+        console.error("Reservation failed", err);
+        setBooking(null);
+      }
     }
   };
 
   const releaseSpot = async () => {
+    if (userId === "") {
+      toast.error("Please enter your Car Plate Number");
+      return;
+    } else if (userId.length !== 8) {
+      toast.error("Car Plate Number must be 8 characters");
+      return;
+    }
+    if (!booking) {
+      toast.error("No active booking to release");
+      return;
+    }
     try {
       await axios.post(`${BASE_URL}/release`, null, {
         params: { userId },
@@ -79,10 +103,6 @@ export default function Home() {
   };
 
   const searchAvailableParking = async () => {
-    if (userId === "") {
-      toast.error("Please enter your Car Plate Number");
-      return;
-    }
     try {
       const res = await axios.get(`${BASE_URL}/all`);
       console.log("Available parking spots:", res.data);
