@@ -34,6 +34,12 @@ export default function Home() {
         client.current?.subscribe("/topic/parking", (message) => {
           const update = JSON.parse(message.body);
           console.log("Received parking update:", update);
+          setAvailableSpot((prevSpots) => {
+            if (!prevSpots) return null;
+            return prevSpots.map((spot) =>
+              spot.id === update.id ? { ...spot, available: update.available } : spot
+            );
+          });
         });
       },
     });
