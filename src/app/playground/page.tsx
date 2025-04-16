@@ -6,31 +6,35 @@ import { Client } from "@stomp/stompjs";
 import toast from "react-hot-toast";
 import SockJS from "sockjs-client";
 
+interface Booking {
+  spot: {
+    id: string;
+  };
+  user: {useerId:string};
+  success: boolean;
+}
+
+
+interface ParkingSpot {
+  id: string;
+  available: boolean;
+  reservedBy: string | null;
+  parkingZone: string;
+}
 export default function Playground() {
   const [userId, setUserId] = useState("");
+  const [userIdB, setUserIdB] = useState("");
   const client = useRef<Client | null>(null);
+  const [booking, setBooking] = useState<Booking | null>(null);
+  const [bookingB, setBookingB] = useState<Booking | null>(null);
   const [checked, setChecked] = useState(true);
+  const [availableSpot, setAvailableSpot] = useState<ParkingSpot[] | null>(null);
   const router = useRouter();
 
   const handleToggle = () => {
     router.push("/");
     setChecked(!checked);
   };
-  interface ParkingSpot {
-    id: string;
-    available: boolean;
-    reservedBy: string | null;
-    parkingZone: string;
-  }
-
-  const [availableSpot, setAvailableSpot] = useState<ParkingSpot[] | null>(
-    null
-  );
-  interface Booking {
-    spot: {
-      id: string;
-    };
-  }
 
   useEffect(() => {
     const socket = new SockJS("http://localhost:8080/ws");
@@ -46,7 +50,7 @@ export default function Playground() {
             if (!prevSpots) return null;
             return prevSpots.map((spot) =>
               spot.id === update.id
-                ? { ...spot, available: update.available }
+                ? { ...spot, available: update.available, reservedBy: update.reservedBy }
                 : spot
             );
           });
@@ -61,52 +65,34 @@ export default function Playground() {
     };
   }, []);
 
-  const [booking, setBooking] = useState<Booking | null>(null);
+  const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL;
 
-  const BASE_URL = "http://localhost:8080/api/parking";
-
-  const reserveSpot = async () => {
-    if (userId === "") {
-      toast.error("Please enter your Car Plate Number");
-      return;
-    } else if (userId.length !== 8) {
-      toast.error("Car Plate Number must be 8 characters");
-      return;
-    } else if (booking) {
-      toast.error("You already have a booking");
-      return;
-    } else {
-      try {
-        const res = await axios.post(`${BASE_URL}/reserve`, null, {
-          params: { userId },
-        });
-        setBooking(res.data);
-      } catch (err) {
-        console.error("Reservation failed", err);
+  const reserveSpotConcurrently = async () => {
+    const reqA = axios.post(`${BASE_URL}/reserve`, null, { params: { userId } });
+    const reqB = axios.post(`${BASE_URL}/reserve`, null, { params: { userId: userIdB } });
+  
+    try {
+      const [resA, resB] = await Promise.all([reqA, reqB]);
+  
+      if (resA.data && resA.data.success) {
+        setBooking(resA.data);
+        toast.success("Parking Booked for " + userId);
+      } else {
+        toast.error("Parking full");
         setBooking(null);
       }
-    }
-  };
-
-  const releaseSpot = async () => {
-    if (userId === "") {
-      toast.error("Please enter your Car Plate Number");
-      return;
-    } else if (userId.length !== 8) {
-      toast.error("Car Plate Number must be 8 characters");
-      return;
-    }
-    if (!booking) {
-      toast.error("No active booking to release");
-      return;
-    }
-    try {
-      await axios.post(`${BASE_URL}/release`, null, {
-        params: { userId },
-      });
-      setBooking(null);
+  
+      if (resB.data && resB.data.success) {
+        setBookingB(resB.data);
+        toast.success("Parking Booked for" + userId);
+      } else {
+        toast.error("Parking full");
+        setBookingB(null);
+      }
     } catch (err) {
-      console.error("Release failed", err);
+      console.error("Reservation failed", err);
+      setBooking(null);
+      setBookingB(null);
     }
   };
 
@@ -122,7 +108,6 @@ export default function Playground() {
         console.error("Search failed", err);
       }
     };
-
     searchAvailableParking();
   }, []);
 
@@ -176,6 +161,9 @@ export default function Playground() {
                         }`}
                       >
                         <div className="text-sm">Spot ID: {spot.id}</div>
+                        <div className="text-sm">
+                          Reserved By: {spot.reservedBy || "None"}
+                        </div>
                         <div>
                           {spot.available ? "✅ Available" : "❌ Unavailable"}
                         </div>
@@ -199,29 +187,7 @@ export default function Playground() {
               onChange={(e) => setUserId(e.target.value)}
               className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400 text-black"
             />
-
-            <div className="flex space-x-2">
-              <button
-                onClick={reserveSpot}
-                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700"
-              >
-                Reserve
-              </button>
-              <button
-                onClick={releaseSpot}
-                className="flex-1 bg-red-500 text-white py-2 rounded-lg hover:bg-red-600"
-              >
-                Release
-              </button>
-              {/* <button
-                onClick={searchAvailableParking}
-                className="flex-1 bg-green-500 text-white py-2 rounded-lg hover:bg-green-600"
-              >
-                Search
-              </button> */}
-            </div>
-
-            {booking ? (
+            {booking && booking.success ? (
               <div className="bg-green-100 text-green-800 p-4 rounded-lg text-center">
                 <p className="font-semibold">Reservation Confirmed</p>
                 <p>Spot ID: {booking.spot.id}</p>
@@ -238,42 +204,27 @@ export default function Playground() {
             <input
               type="text"
               placeholder="Enter your Car Plate Number"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
+              value={userIdB}
+              onChange={(e) => setUserIdB(e.target.value)}
               className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400 text-black"
             />
-
-            <div className="flex space-x-2">
-              <button
-                onClick={reserveSpot}
-                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700"
-              >
-                Reserve
-              </button>
-              <button
-                onClick={releaseSpot}
-                className="flex-1 bg-red-500 text-white py-2 rounded-lg hover:bg-red-600"
-              >
-                Release
-              </button>
-              {/* <button
-                onClick={searchAvailableParking}
-                className="flex-1 bg-green-500 text-white py-2 rounded-lg hover:bg-green-600"
-              >
-                Search
-              </button> */}
-            </div>
-
-            {booking ? (
+            {bookingB && bookingB.success ? (
               <div className="bg-green-100 text-green-800 p-4 rounded-lg text-center">
                 <p className="font-semibold">Reservation Confirmed</p>
-                <p>Spot ID: {booking.spot.id}</p>
+                <p>Spot ID: {bookingB?.spot.id}</p>
               </div>
             ) : (
               <p className="text-center text-gray-500">No active booking</p>
             )}
           </div>
           </div>
+        </div>
+        <div className="absolute bottom-16">
+          <button className="bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-700"
+            onClick={reserveSpotConcurrently}
+          >
+            Reserve Concurrenly
+          </button>
         </div>
       </main>
     </>

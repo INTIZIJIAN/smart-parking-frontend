@@ -6,6 +6,18 @@ import { Client } from "@stomp/stompjs";
 import toast from "react-hot-toast";
 import SockJS from "sockjs-client";
 
+interface Booking {
+  spot: {
+    id: string;
+  };
+}
+
+interface ParkingSpot {
+  id: string;
+  available: boolean;
+  reservedBy: string | null;
+  parkingZone: string;
+}
 
 export default function Home() {
   const [userId, setUserId] = useState("");
@@ -18,21 +30,9 @@ export default function Home() {
 
   const router = useRouter()
 
-  interface ParkingSpot {
-    id: string;
-    available: boolean;
-    reservedBy: string | null;
-    parkingZone: string;
-  }
-
   const [availableSpot, setAvailableSpot] = useState<ParkingSpot[] | null>(
     null
   );
-  interface Booking {
-    spot: {
-      id: string;
-    };
-  }
 
   useEffect(() => {
     const socket = new SockJS("http://localhost:8080/ws");
@@ -65,7 +65,7 @@ export default function Home() {
 
   const [booking, setBooking] = useState<Booking | null>(null);
 
-  const BASE_URL = "http://localhost:8080/api/parking";
+  const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL;
 
   const reserveSpot = async () => {
     if (userId === "") {
