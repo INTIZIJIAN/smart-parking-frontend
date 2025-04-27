@@ -1,40 +1,66 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+
 import axios from "axios";
+import { useState, useEffect, useRef } from "react";
 import { Client } from "@stomp/stompjs";
-import toast from "react-hot-toast";
 import SockJS from "sockjs-client";
+import toast from "react-hot-toast";
+import { BASE_URL } from "@/app/util/url";
+import qs from "qs";
+import Link from "next/link";
 
 interface Booking {
-  spot: {
-    id: string;
-  };
-  user: {useerId:string};
-  success: boolean;
+  isSuccess: boolean;
+  user: { userId: string };
 }
 
+interface TimeSlot {
+  duration: string;
+  available: boolean;
+  booking: Booking | null;
+}
 
 interface ParkingSpot {
   id: string;
   available: boolean;
-  reservedBy: string | null;
   parkingZone: string;
+  durations: TimeSlot[];
 }
-export default function Playground() {
+
+export default function Concurrent() {
+  const id = "ZONE-C-SPOT-10";
+
+  const [spot, setSpot] = useState<ParkingSpot | null>(null);
+  const [spot2, setSpot2] = useState<ParkingSpot | null>(null);
+  const [selectedDurations, setSelectedDurations] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const client = useRef<Client | null>(null);
   const [userId, setUserId] = useState("");
   const [userIdB, setUserIdB] = useState("");
-  const client = useRef<Client | null>(null);
-  const [booking, setBooking] = useState<Booking | null>(null);
-  const [bookingB, setBookingB] = useState<Booking | null>(null);
-  const [checked, setChecked] = useState(true);
-  const [availableSpot, setAvailableSpot] = useState<ParkingSpot[] | null>(null);
-  const router = useRouter();
 
-  const handleToggle = () => {
-    router.push("/");
-    setChecked(!checked);
-  };
+  // console.log("Spot ID:", id);
+  // console.log("Spot Data:", spot);
+  // console.log("Selected Durations:", selectedDurations);
+  // console.log("User ID:", userId);
+
+  useEffect(() => {
+    async function fetchSpot() {
+      try {
+        const res = await axios.get(`${process.env.NEXT_PUBLIC_BASE_URL}/all`);
+        const filteredSpots = res.data.filter(
+          (spot: ParkingSpot) => spot.id === id
+        );
+        setSpot(filteredSpots[0] ?? null);
+        setSpot2(filteredSpots[0] ?? null);
+      } catch (error) {
+        console.error("Failed to fetch spot", error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchSpot();
+  });
 
   useEffect(() => {
     const socket = new SockJS("http://localhost:8080/ws");
@@ -46,14 +72,7 @@ export default function Playground() {
         client.current?.subscribe("/topic/parking", (message) => {
           const update = JSON.parse(message.body);
           console.log("Received parking update:", update);
-          setAvailableSpot((prevSpots) => {
-            if (!prevSpots) return null;
-            return prevSpots.map((spot) =>
-              spot.id === update.id
-                ? { ...spot, available: update.available, reservedBy: update.reservedBy }
-                : spot
-            );
-          });
+          setSpot(update);
         });
       },
     });
@@ -65,168 +84,214 @@ export default function Playground() {
     };
   }, []);
 
-  const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL;
-
   const reserveSpotConcurrently = async () => {
-    const reqA = axios.post(`${BASE_URL}/reserve`, null, { params: { userId } });
-    const reqB = axios.post(`${BASE_URL}/reserve`, null, { params: { userId: userIdB } });
-  
     try {
-      const [resA, resB] = await Promise.all([reqA, reqB]);
+      // Fire both requests *simultaneously*, without awaiting first
+      const reqA = axios.post(`${BASE_URL}/reserve`, null, {
+        params: {
+          userId: userId,
+          spotId: id,
+          selectedDurations: selectedDurations,
+        },
+        paramsSerializer: (params) =>
+          qs.stringify(params, { arrayFormat: "repeat" }),
+      });
   
-      if (resA.data && resA.data.success) {
-        setBooking(resA.data);
-        toast.success("Parking Booked for " + userId);
+      const reqB = axios.post(`${BASE_URL}/reserve`, null, {
+        params: {
+          userId: userIdB,
+          spotId: id,
+          selectedDurations: selectedDurations,
+        },
+        paramsSerializer: (params) =>
+          qs.stringify(params, { arrayFormat: "repeat" }),
+      });
+  
+      // Wait for both at the same time
+      const [resA, resB] = await Promise.allSettled([reqA, reqB]);
+  
+      // Handle A
+      if (resA.status === "fulfilled" && resA.value.status === 200) {
+        toast.success(`🚗 ${userId} reserved successfully!`, { duration: 3000 });
       } else {
-        toast.error("Parking full");
-        setBooking(null);
+        toast.error(`❌ ${userId} failed to reserve.`, { duration: 3000 });
       }
   
-      if (resB.data && resB.data.success) {
-        setBookingB(resB.data);
-        toast.success("Parking Booked for" + userId);
+      // Handle B
+      if (resB.status === "fulfilled" && resB.value.status === 200) {
+        toast.success(`🚗 ${userIdB} reserved successfully!`, { duration: 3000 });
       } else {
-        toast.error("Parking full");
-        setBookingB(null);
+        toast.error(`❌ ${userIdB} failed to reserve.`, { duration: 3000 });
       }
     } catch (err) {
-      console.error("Reservation failed", err);
-      setBooking(null);
-      setBookingB(null);
+      console.error("Reservation failed unexpectedly", err);
+      toast.error("Something went wrong!", { duration: 3000 });
     }
   };
 
-  useEffect(() => {
-    const searchAvailableParking = async () => {
-      try {
-        const res = await axios.get(`${BASE_URL}/all`);
-        const sorted = res.data.sort((a: ParkingSpot, b: ParkingSpot) =>
-          a.id.localeCompare(b.id)
-        );
-        setAvailableSpot(sorted);
-      } catch (err) {
-        console.error("Search failed", err);
-      }
-    };
-    searchAvailableParking();
-  }, []);
+  // const bookSpot = async () => {
+  //   try {
+  //     const res = await axios.post(`${BASE_URL}/reserve`, null, {
+  //       params: {
+  //         userId: userId,
+  //         spotId: id,
+  //         selectedDurations: selectedDurations,
+  //       },
+  //       paramsSerializer: (params) =>
+  //         qs.stringify(params, { arrayFormat: "repeat" }),
+  //     });
+
+  //     if (res.status === 200) {
+  //       toast.success("Spot reserved successfully!");
+  //     }
+  //   } catch (error) {
+  //     console.error("Failed to book spot", error);
+  //     if (axios.isAxiosError(error)) {
+  //       const errorMessage =
+  //         typeof error.response?.data === "string"
+  //           ? error.response.data
+  //           : error.response?.data?.message || "Fully booked.";
+
+  //       toast.error(errorMessage);
+  //     } else {
+  //       toast.error("An unexpected error occurred.");
+  //     }
+  //   }
+  // };
+
+  if (loading) {
+    return (
+      <div className="text-center mt-10 text-gray-500">
+        Loading spot information...
+      </div>
+    );
+  }
+
+  if (!spot) {
+    return (
+      <div className="text-center mt-10 text-gray-500">Spot not found</div>
+    );
+  }
+
+  const toggleDuration = (duration: string) => {
+    setSelectedDurations((prev) =>
+      prev.includes(duration)
+        ? prev.filter((d) => d !== duration)
+        : [...prev, duration]
+    );
+  };
 
   return (
-    <>
-      <main className="flex items-center justify-center min-h-screen bg-gray-900">
-        <div className="absolute top-4 left-4">
-          <label className="absolute top-4 left-4 inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              className="sr-only peer"
-              checked={checked}
-              onChange={handleToggle}
-            />
-            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer dark:bg-gray-700 peer-checked:bg-blue-600 relative">
-              <div className="absolute right-1 top-1 bg-white w-4 h-4 rounded-full transition peer-checked:translate-x-full" />
-              <span className="ml-15 text-sm font-medium">Playground</span>
+    <div className="flex flex-col items-center mt-10">
+      <div className='absolute top-4 left-4 z-50">'>
+        <Link href="/" className="text-blue-500 hover:underline">
+          Back to Home
+        </Link>
+      </div>
+      <h1 className="text-4xl">Concurrent Reservation Demo</h1>
+      <h1 className="text-2xl font-bold text-blue-600 mb-4">{spot.id}</h1>
+  
+      <div className="flex grid-cols-1 grid-rows-2 gap-x-105">
+        <div className="grid grid-cols-2 gap-4">
+          {spot.durations.map((slot, index) => (
+            <div
+              key={index}
+              onClick={() => {
+                if (slot.available) {
+                  toggleDuration(slot.duration);
+                }
+              }}
+              className={`p-3 rounded-lg border font-medium text-center cursor-pointer transition-all ${
+                slot.available
+                  ? selectedDurations.includes(slot.duration)
+                    ? "bg-blue-300 border-blue-600" 
+                    : "bg-green-200 border-green-500" // available
+                  : "bg-red-200 border-red-500 cursor-not-allowed" // booked
+              }`}
+            >
+              <p className="text-sm text-black font-bold">{slot.duration}</p>
+              <p className="text-xs text-black">
+                {slot.available ? "Available" : "Booked"}
+              </p>
+              <p className="text-sm text-blue-600">Reserved by: {slot.booking?.user.userId ? slot.booking?.user.userId : '****'}</p>
             </div>
-          </label>
+          ))}
         </div>
-        <div className="flex flex-col w-full justify-center items-center space-y-6">
-          {availableSpot && availableSpot.length > 0 && (
-            <div className="flex flex-wrap justify-center gap-6">
-              {Object.entries(
-                availableSpot.reduce(
-                  (acc: Record<string, ParkingSpot[]>, spot: ParkingSpot) => {
-                    if (!acc[spot.parkingZone]) {
-                      acc[spot.parkingZone] = [];
-                    }
-                    acc[spot.parkingZone].push(spot);
-                    return acc;
-                  },
-                  {}
-                )
-              ).map(([zone, spots]) => (
-                <div
-                  key={zone}
-                  className="bg-white p-4 rounded-lg shadow-md w-auto"
-                >
-                  <h2 className="text-lg font-semibold text-blue-500 text-center mb-2">
-                    {zone}
-                  </h2>
-                  <ul className="grid grid-cols-2 gap-3 text-black">
-                    {spots.map((spot: ParkingSpot) => (
-                      <li
-                        key={spot.id}
-                        className={`p-3 rounded-md border text-center font-medium ${
-                          spot.available
-                            ? "bg-green-100 border-green-500"
-                            : "bg-red-100 border-red-500"
-                        }`}
-                      >
-                        <div className="text-sm">Spot ID: {spot.id}</div>
-                        <div className="text-sm">
-                          Reserved By: {spot.reservedBy || "None"}
-                        </div>
-                        <div>
-                          {spot.available ? "✅ Available" : "❌ Unavailable"}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="flex items-center justify-center gap-x-60 w-full">
-          <div className="w-auto bg-white rounded-2xl shadow-md p-6 space-y-6">
-            <h1 className="text-2xl font-bold text-center text-blue-600">
-              Smart Parking (User A)
-            </h1>
 
+        <div className="grid grid-cols-2 gap-4">
+          {spot2?.durations.map((slot, index) => (
+            <div
+              key={index}
+              onClick={() => {
+                if (slot.available) {
+                  toggleDuration(slot.duration);
+                }
+              }}
+              className={`p-3 rounded-lg border font-medium text-center cursor-pointer transition-all ${
+                slot.available
+                  ? selectedDurations.includes(slot.duration)
+                    ? "bg-blue-300 border-blue-600" // selected
+                    : "bg-green-200 border-green-500" // available
+                  : "bg-red-200 border-red-500 cursor-not-allowed" // booked
+              }`}
+            >
+              <p className="text-sm text-black font-bold">{slot.duration}</p>
+              <p className="text-xs text-black">
+                {slot.available ? "Available" : "Booked"}
+              </p>
+              <p className="text-sm text-blue-600">Reserved by: {slot.booking?.user.userId ? slot.booking?.user.userId : '****'}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3">
+        <div className="w-auto bg-white rounded-2xl shadow-md p-6 space-y-6 m-8 justify-items-center">
+          <h1 className="text-xl font-bold text-center text-blue-600">
+            Smart Parking (User A)
+          </h1>
+          <div>
             <input
               type="text"
               placeholder="Enter your Car Plate Number"
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
-              className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400 text-black"
+              className="w-60 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400 text-black"
             />
-            {booking && booking.success ? (
-              <div className="bg-green-100 text-green-800 p-4 rounded-lg text-center">
-                <p className="font-semibold">Reservation Confirmed</p>
-                <p>Spot ID: {booking.spot.id}</p>
-              </div>
-            ) : (
-              <p className="text-center text-gray-500">No active booking</p>
-            )}
           </div>
-          <div className="w-auto bg-white rounded-2xl shadow-md p-6 space-y-6">
-            <h1 className="text-2xl font-bold text-center text-blue-600">
-              Smart Parking (User B)
-            </h1>
-
+        </div>
+        <div className="flex flex-col w-full justify-center items-center space-y-6 mt-10">
+        <button
+              className={`px-6 py-3 rounded-lg font-semibold transition-all ${
+                selectedDurations.length > 0
+                  ? "bg-blue-600 hover:bg-blue-700 text-white"
+                  : "bg-gray-400 text-gray-200 cursor-not-allowed"
+              }`}
+              disabled={selectedDurations.length === 0}
+              onClick={reserveSpotConcurrently}
+            >
+              Concurrent Booking{" "}
+              {selectedDurations.length > 0
+                ? `(${selectedDurations.length})`
+                : ""}
+            </button>
+        </div>
+      
+        <div className="w-auto bg-white rounded-2xl shadow-md p-6 space-y-6 m-8 justify-items-center">
+          <h1 className="text-xl font-bold text-center text-blue-600">
+            Smart Parking (User B)
+          </h1>
+          <div>
             <input
               type="text"
               placeholder="Enter your Car Plate Number"
               value={userIdB}
               onChange={(e) => setUserIdB(e.target.value)}
-              className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400 text-black"
+              className="w-60 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400 text-black"
             />
-            {bookingB && bookingB.success ? (
-              <div className="bg-green-100 text-green-800 p-4 rounded-lg text-center">
-                <p className="font-semibold">Reservation Confirmed</p>
-                <p>Spot ID: {bookingB?.spot.id}</p>
-              </div>
-            ) : (
-              <p className="text-center text-gray-500">No active booking</p>
-            )}
-          </div>
           </div>
         </div>
-        <div className="absolute bottom-16">
-          <button className="bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-700"
-            onClick={reserveSpotConcurrently}
-          >
-            Reserve Concurrenly
-          </button>
-        </div>
-      </main>
-    </>
+      </div>
+    </div>
   );
 }

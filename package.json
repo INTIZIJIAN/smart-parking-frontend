@@ -13,6 +13,7 @@
     "@types/sockjs-client": "^1.5.4",
     "axios": "^1.8.4",
     "next": "15.3.0",
+    "qs": "^6.14.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hot-toast": "^2.5.2",
